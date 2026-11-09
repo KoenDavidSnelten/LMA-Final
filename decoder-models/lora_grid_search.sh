@@ -4,8 +4,8 @@
 #SBATCH --partition=gpu
 #SBATCH --gpus-per-node=1
 #SBATCH --mem=32G
-#SBATCH --output=logs/output/%x_%A_%a.out
-#SBATCH --error=logs/error/%x_%A_%a.err
+#SBATCH --output=grid_logs/output/%x_%A_%a.out
+#SBATCH --error=grid_logs/error/%x_%A_%a.err
 #SBATCH --array=0-44
 
 # LoRA grid search: one array task per (model, learning rate, rank) configuration
