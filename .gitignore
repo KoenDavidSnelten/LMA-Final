@@ -1,0 +1,9 @@
+.zip
+.pdf
+.ENV
+venv/
+venvs/
+
+logs/
+.out
+.err
