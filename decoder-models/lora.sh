@@ -32,7 +32,7 @@ echo "=========================================="
 python3 lora.py \
     --model $MODEL \
     --output_file predictions/lora_${MODEL##*/}.csv \
-    --epochs 2 \
+    --epochs 3 \
     --batch_size 8 \
     --learning_rate 2e-4 \
     --lora_rank 16

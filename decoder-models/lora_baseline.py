@@ -14,7 +14,7 @@ import torch
 import argparse
 from pathlib import Path
 
-from lora import TEMPLATE, read_corpus, predict_labels, evaluate, write_predictions, write_raw_outputs
+from lora import TEMPLATE, read_corpus, predict_labels, print_scores, write_predictions, write_raw_outputs
 
 
 # ---------------------------------------------------------------------------
@@ -35,15 +35,6 @@ def create_arg_parser():
     parser.add_argument("-b", "--batch_size", type=int, default=8,
                         help="Inference batch size (default: 8)")
     return parser.parse_args()
-
-
-def print_scores(split, rows, predictions):
-    """Print the official scores for one data split."""
-    weighted_f1, soft_cons, hard_cons = evaluate(rows, predictions)
-    print(f"Official scores on {split}:")
-    print(f"  Weighted F1: {100 * weighted_f1:.1f}")
-    print(f"  SoftCons:    {100 * soft_cons:.1f}")
-    print(f"  HardCons:    {100 * hard_cons:.1f}")
 
 
 # ---------------------------------------------------------------------------

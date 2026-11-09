@@ -1,15 +1,16 @@
 """Finetune a generative language model on DiCo-NLI with LoRA.
 
 The model gets a fixed 0-shot prompt (TEMPLATE) and is trained to answer with
-the gold label. Only the answer tokens are used for the loss. After
-training, the dev set (and optionally the test set) is scored on Weighted F1,
-SoftCons and HardCons.
+the gold label. Only the answer tokens are used for the loss. After every
+epoch, the dev set (and optionally the test set) is scored on Weighted F1,
+SoftCons and HardCons, so one run covers all epoch settings. Output files get
+an _e{epoch} suffix.
 
 Example:
-    python lora.py --model Qwen/Qwen3.5-0.8B --epochs 2
+    python lora.py --model Qwen/Qwen3.5-0.8B --epochs 3
 """
 
-from transformers import AutoModelForCausalLM, AutoTokenizer, DataCollatorForSeq2Seq, Trainer, TrainingArguments, pipeline
+from transformers import AutoModelForCausalLM, AutoTokenizer, DataCollatorForSeq2Seq, Trainer, TrainerCallback, TrainingArguments, pipeline
 from peft import LoraConfig, get_peft_model
 from datasets import Dataset
 import torch
@@ -60,8 +61,8 @@ def create_arg_parser():
                         help="Test prediction CSV (default: predictions/lora.csv)")
     parser.add_argument("-m", "--model", default="Qwen/Qwen3.5-0.8B",
                         help="Model string from Huggingface (default: Qwen/Qwen3.5-0.8B)")
-    parser.add_argument("-e", "--epochs", type=int, default=2,
-                        help="Number of training epochs (default: 2)")
+    parser.add_argument("-e", "--epochs", type=int, default=3,
+                        help="Number of training epochs, scored after each one (default: 3)")
     parser.add_argument("-b", "--batch_size", type=int, default=8,
                         help="Training batch size (default: 8)")
     parser.add_argument("-lr", "--learning_rate", type=float, default=2e-4,
@@ -171,6 +172,15 @@ def evaluate(rows, predictions):
     return weighted_f1, soft_cons, hard_cons
 
 
+def print_scores(split, rows, predictions):
+    """Print the official scores for one data split."""
+    weighted_f1, soft_cons, hard_cons = evaluate(rows, predictions)
+    print(f"Official scores on {split}:")
+    print(f"  Weighted F1: {100 * weighted_f1:.1f}")
+    print(f"  SoftCons:    {100 * soft_cons:.1f}")
+    print(f"  HardCons:    {100 * hard_cons:.1f}")
+
+
 # ---------------------------------------------------------------------------
 # Writing output
 # ---------------------------------------------------------------------------
@@ -214,6 +224,46 @@ def tokenize_example(row, template, tokenizer):
 
 
 # ---------------------------------------------------------------------------
+# Per-epoch evaluation
+# ---------------------------------------------------------------------------
+
+def predict_and_score(generator, args, template, epoch):
+    """Predict and score dev (and test if asked), writing files with an _e{epoch} suffix."""
+    output_base = f"{Path(args.output_file).with_suffix('')}_e{epoch}"
+
+    dev_rows = read_corpus(args.dev_file)
+    dev_predictions, dev_raw = predict_labels(generator, dev_rows, template, args.batch_size)
+    write_raw_outputs(f"{output_base}_dev_raw.csv", dev_rows, dev_predictions, dev_raw)
+    print_scores(f"dev (epoch {epoch})", dev_rows, dev_predictions)
+
+    if args.test:
+        test_rows = read_corpus(args.test)
+        test_predictions, test_raw = predict_labels(generator, test_rows, template, args.batch_size)
+        write_predictions(f"{output_base}.csv", test_rows, test_predictions)
+        write_raw_outputs(f"{output_base}_test_raw.csv", test_rows, test_predictions, test_raw)
+        print(f"Predictions written to {output_base}.csv")
+        print_scores(f"test (epoch {epoch})", test_rows, test_predictions)
+
+
+class EpochEvalCallback(TrainerCallback):
+    """Run predict_and_score at the end of every training epoch."""
+
+    def __init__(self, tokenizer, script_args, template):
+        self.tokenizer = tokenizer
+        self.script_args = script_args
+        self.template = template
+
+    def on_epoch_end(self, args, state, control, model=None, **kwargs):
+        # Generation needs left padding, training uses right padding
+        model.eval()
+        self.tokenizer.padding_side = "left"
+        generator = pipeline(task="text-generation", model=model, tokenizer=self.tokenizer)
+        predict_and_score(generator, self.script_args, self.template, round(state.epoch))
+        self.tokenizer.padding_side = "right"
+        model.train()
+
+
+# ---------------------------------------------------------------------------
 # Main
 # ---------------------------------------------------------------------------
 
@@ -236,7 +286,8 @@ if __name__ == "__main__":
     model = get_peft_model(model, lora_config)
     model.print_trainable_parameters()
 
-    # Train
+    # Train; dev/test are scored after every epoch by the callback
+    tokenizer.padding_side = "right"
     train_rows = read_corpus(args.train_file)
     train_dataset = Dataset.from_list([tokenize_example(row, template, tokenizer) for row in train_rows])
     trainer = Trainer(
@@ -250,35 +301,6 @@ if __name__ == "__main__":
                                report_to="none"),
         train_dataset=train_dataset,
         data_collator=DataCollatorForSeq2Seq(tokenizer),  # pads labels with -100
+        callbacks=[EpochEvalCallback(tokenizer, args, template)],
     )
     trainer.train()
-
-    # Merge the adapters into the model and generate the answers
-    model = model.merge_and_unload()
-    tokenizer.padding_side = "left"
-    generator = pipeline(task="text-generation", model=model, tokenizer=tokenizer)
-
-    # Predict and score the dev set
-    dev_rows = read_corpus(args.dev_file)
-    dev_predictions, dev_raw = predict_labels(generator, dev_rows, template, args.batch_size)
-    raw_file = Path(args.output_file).with_suffix("")
-    write_raw_outputs(f"{raw_file}_dev_raw.csv", dev_rows, dev_predictions, dev_raw)
-    weighted_f1, soft_cons, hard_cons = evaluate(dev_rows, dev_predictions)
-    print("Official scores on dev:")
-    print(f"  Weighted F1: {100 * weighted_f1:.1f}")
-    print(f"  SoftCons:    {100 * soft_cons:.1f}")
-    print(f"  HardCons:    {100 * hard_cons:.1f}")
-
-    # Do prediction on test if asked
-    if args.test:
-        test_rows = read_corpus(args.test)
-        test_predictions, test_raw = predict_labels(generator, test_rows, template, args.batch_size)
-        write_predictions(args.output_file, test_rows, test_predictions)
-        write_raw_outputs(f"{raw_file}_test_raw.csv", test_rows, test_predictions, test_raw)
-        print(f"Predictions written to {args.output_file}")
-
-        weighted_f1, soft_cons, hard_cons = evaluate(test_rows, test_predictions)
-        print("Official scores on test:")
-        print(f"  Weighted F1: {100 * weighted_f1:.1f}")
-        print(f"  SoftCons:    {100 * soft_cons:.1f}")
-        print(f"  HardCons:    {100 * hard_cons:.1f}")
