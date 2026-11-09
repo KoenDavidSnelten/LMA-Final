@@ -19,7 +19,7 @@ export HF_HOME=/scratch/$USER/hf_cache
 source $HOME/venvs/LMA/bin/activate
 
 set -a
-source .env
+source ../.ENV
 set +a
 
 MODEL=${1:-Qwen/Qwen3.5-0.8B}

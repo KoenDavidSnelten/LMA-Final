@@ -22,7 +22,7 @@ export HF_HOME=/scratch/$USER/hf_cache
 source $HOME/venvs/LMA/bin/activate
 
 set -a
-source .env
+source ../.ENV
 set +a
 
 # Defaults
@@ -34,8 +34,8 @@ BATCH_SIZE=8
 
 # Grid search params
 MODELS=(Qwen/Qwen3.5-0.8B Qwen/Qwen3.5-9B mistralai/Ministral-8B-Instruct-2410 meta-llama/Llama-3.1-8B-Instruct google/gemma-4-E4B-it)
-EPOCHS=(1 2)
-LEARNING_RATES=(1e-4 2e-4 5e-4)
+EPOCHS=(1 2 3)
+LEARNING_RATES=(1e-4 3e-4 5e-4)
 LORA_RANKS=(8 16 32)
 
 # Build the full grid, one "model|ep|lr|rank" entry per configuration
